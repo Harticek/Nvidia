@@ -1,4 +1,4 @@
-// server.js - Fully Resilient OpenAI to NVIDIA NIM API Proxy idk
+// server.js - Fully Resilient OpenAI to NVIDIA NIM API Proxy
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -8,23 +8,18 @@ const https = require('https');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 1. MIDDLEWARE: Payload limit set to 50mb
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// 2. CONFIGURATION & ENVIRONMENT VARIABLES
+// Configuration
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
-const NIM_API_KEY = process.env.NIM_API_KEY;
-
 const SHOW_REASONING = true;
 const ENABLE_THINKING_MODE = true;
 
-// FAULT TOLERANCE TUNING
 const MAX_RETRIES = 3;            
 const INITIAL_RETRY_DELAY = 1500; 
 
-// 3. SPEED UPGRADE: Connection Pooling
 const axiosInstance = axios.create({
   httpAgent: new http.Agent({ keepAlive: true }),
   httpsAgent: new https.Agent({ keepAlive: true }),
@@ -36,10 +31,8 @@ const MODEL_MAPPING = {
   'nvidia': "nvidia/nemotron-3-ultra-550b-a55b"
 };
 
-// HELPER UTILITIES
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Unmasks hidden stream error messages from Axios responses
 async function parseAxiosStreamError(error) {
   if (error.response?.data && typeof error.response.data.on === 'function') {
     try {
@@ -72,12 +65,20 @@ app.get('/v1/models', (req, res) => {
   });
 });
 
-// MAIN COMPLETIONS ENDPOINT
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     let { model, messages, temperature, max_tokens, stream } = req.body;
     
-    // 🚀 SANITIZE MESSAGES: Remove old thoughts and ensure content is never null/undefined
+    // 🚀 Robust API Key Resolution: Railway Env -> JanitorAI Auth Header
+    const incomingHeader = req.headers.authorization ? req.headers.authorization.replace(/^Bearer\s+/i, '').trim() : '';
+    const rawKey = process.env.NIM_API_KEY || process.env.NVIDIA_API_KEY || incomingHeader;
+    const activeKey = rawKey ? rawKey.replace(/^["']|["']$/g, '').trim() : '';
+
+    if (!activeKey) {
+      throw new Error("No API key found. Set NIM_API_KEY in Railway or enter your nvapi key in JanitorAI.");
+    }
+
+    // Clean previous thought traces
     let cleanedMessages = (messages || []).map(msg => {
       let content = msg.content;
       if (msg.role === 'assistant' && typeof content === 'string') {
@@ -90,14 +91,12 @@ app.post('/v1/chat/completions', async (req, res) => {
     });
 
     let nimModel = MODEL_MAPPING[model] || model || 'meta/llama-3.1-8b-instruct'; 
-    
-    // 🚀 CAP MAX_TOKENS: Cap generation output at NVIDIA's maximum limit (4096)
     const safeMaxTokens = Math.min(max_tokens || 4096, 4096);
 
     const nimRequest = {
       model: nimModel,
       messages: cleanedMessages, 
-      temperature: temperature || 0.6,
+      temperature: temperature !== undefined ? temperature : 0.6,
       max_tokens: safeMaxTokens,
       stream: stream || false
     };
@@ -111,13 +110,11 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
     
     if (stream) {
-      // 🚀 1. IMMEDIATELY lock in stream response with JanitorAI & Railway
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       if (res.flushHeaders) res.flushHeaders();
 
-      // 🚀 2. Keep-alive heartbeat every 15s to bypass intermediate network timeouts
       const heartbeat = setInterval(() => {
         try {
           res.write(': keepalive\n\n');
@@ -133,19 +130,22 @@ app.post('/v1/chat/completions', async (req, res) => {
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
           try {
             response = await axiosInstance.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
-              headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
+              headers: { 
+                'Authorization': `Bearer ${activeKey}`, 
+                'Content-Type': 'application/json' 
+              },
               responseType: 'stream',
-              timeout: 600000 // 10-minute maximum wait for heavy prompts
+              timeout: 600000
             });
-            break; // Request succeeded!
+            break;
           } catch (error) {
             const status = error.response?.status;
             const detailedErrorMsg = await parseAxiosStreamError(error);
 
             console.error(`🚨 NVIDIA NIM Error [Status ${status || 'Unknown'}]:`, detailedErrorMsg);
 
-            // Fast-fail permanent client/configuration errors
-            if (status === 400 || status === 404 || status === 410) {
+            // Fail immediately on client errors (401, 400, 403, 404)
+            if (status === 400 || status === 401 || status === 403 || status === 404 || status === 410) {
               throw new Error(`[HTTP ${status}] ${detailedErrorMsg}`);
             }
 
@@ -166,7 +166,6 @@ app.post('/v1/chat/completions', async (req, res) => {
           }
         }
 
-        // Stop the keepalive heartbeat once the API starts outputting real data
         clearInterval(heartbeat);
         
         let buffer = '';
@@ -220,10 +219,10 @@ app.post('/v1/chat/completions', async (req, res) => {
                 }
                 res.write(`data: ${JSON.stringify(data)}\n\n`);
               } catch (e) {
-                // Ignore incomplete JSON stream fragments
+                // Incomplete JSON chunk
               }
             } else if (line.includes('[DONE]')) {
-              res.write(line + '\n');
+              res.write('data: [DONE]\n\n');
             }
           });
         });
@@ -233,14 +232,21 @@ app.post('/v1/chat/completions', async (req, res) => {
       } catch (streamError) {
         clearInterval(heartbeat);
         console.error('🚨 Request Execution Failed:', streamError.message);
-        res.write(`data: ${JSON.stringify({ error: { message: `NVIDIA Proxy Error: ${streamError.message}` } })}\n\n`);
+        
+        // Output inside delta content so JanitorAI displays the real message instead of pgshag2
+        res.write(`data: ${JSON.stringify({
+          choices: [{ delta: { content: `\n\n**[NVIDIA Proxy Error]**: ${streamError.message}` } }]
+        })}\n\n`);
+        res.write('data: [DONE]\n\n');
         res.end();
       }
 
     } else {
-      // NON-STREAM FALLBACK
       const response = await axiosInstance.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
-        headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
+        headers: { 
+          'Authorization': `Bearer ${activeKey}`, 
+          'Content-Type': 'application/json' 
+        },
         responseType: 'json',
         timeout: 600000 
       });
@@ -248,11 +254,6 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
     
   } catch (error) {
-    console.error('\n=== 🚨 GLOBAL PROXY ERROR 🚨 ===');
-    console.error('Status:', error.response?.status || 500);
-    console.error('Message:', error.message);
-    console.error('================================\n');
-    
     if (!res.headersSent) {
       res.status(error.response?.status || 500).json({
         error: { message: error.response?.data?.detail || error.message || 'Server error' }
