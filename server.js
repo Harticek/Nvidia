@@ -26,7 +26,7 @@ const axiosInstance = axios.create({
 });
 
 const MODEL_MAPPING = {
-  'glmflash': "z-ai/glm-5.3-flash",
+  'nvidia_': "nvidia/nemotron-3.5-super-vl-120b-a12b",
   'glm': "z-ai/glm-5.3",
   'nvidia': "nvidia/nemotron-3-ultra-550b-a55b"
 };
