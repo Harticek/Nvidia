@@ -26,7 +26,7 @@ const axiosInstance = axios.create({
 });
 
 const MODEL_MAPPING = {
-  'nvidia_': "nvidia/nemotron-3.5-super-vl-120b-a12b",
+  'deepseek': "deepseek-ai/deepseek-v4.1-flash",
   'glm': "z-ai/glm-5.3-flash",
   'nvidia': "nvidia/nemotron-3-ultra-550b-a55b"
 };
