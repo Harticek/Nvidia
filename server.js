@@ -28,6 +28,7 @@ const axiosInstance = axios.create({
 const MODEL_MAPPING = {
   'deepseek': "deepseek-ai/deepseek-v4.1-flash",
   'glm': "z-ai/glm-5.3-flash",
+  'mistral': "mistralai/mistral-large-4-1t-a52b",
   'nvidia': "nvidia/nemotron-3-ultra-550b-a55b"
 };
 
