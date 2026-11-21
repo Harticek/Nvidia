@@ -15,7 +15,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // Configuration
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const SHOW_REASONING = true;
-const ENABLE_THINKING_MODE = true;
+const ENABLE_THINKING_MODE = false;
 
 const MAX_RETRIES = 3;            
 const INITIAL_RETRY_DELAY = 1500; 
