@@ -117,7 +117,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         nimModel.includes('nemotron-3-super') ||
         nimModel.includes('nemotron-3-nano')) {
       nimRequest.chat_template_kwargs = {
-        enable_thinking: false
+        //enable_thinking: false
       };
     }
     // Optional: enable thinking only for GLM / DeepSeek if you turn the flag on
